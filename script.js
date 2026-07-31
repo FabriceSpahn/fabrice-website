@@ -23,6 +23,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let isReady = false;
   let hasDrawnFrame = false;
   let fallbackApplied = false;
+  let canReadVideoPixels = window.location.protocol !== "file:";
   let frameCallbackId = 0;
   let animationFrameId = 0;
   let rippleAnimationFrameId = 0;
@@ -321,16 +322,23 @@ window.addEventListener("DOMContentLoaded", () => {
     sampleCanvas.height = rows;
     const fit = fitCover(video.videoWidth, video.videoHeight, columns, rows);
     sampleContext.drawImage(video, fit.offsetX, fit.offsetY, fit.drawWidth, fit.drawHeight);
-    const pixels = sampleContext.getImageData(0, 0, columns, rows).data;
+    let pixels = null;
+
+    if (canReadVideoPixels) {
+      try {
+        pixels = sampleContext.getImageData(0, 0, columns, rows).data;
+      } catch {
+        canReadVideoPixels = false;
+      }
+    }
+
+    context.imageSmoothingEnabled = false;
 
     for (let row = 0; row < rows; row += 1) {
       for (let column = 0; column < columns; column += 1) {
         const pixelIndex = (row * columns + column) * 4;
         const tileX = column * (cellWidth + gap);
         const tileY = row * (cellHeight + gap);
-        const red = pixels[pixelIndex];
-        const green = pixels[pixelIndex + 1];
-        const blue = pixels[pixelIndex + 2];
         const centerX = tileX + cellWidth / 2;
         const centerY = tileY + cellHeight / 2;
         let rippleStrength = 0;
@@ -367,16 +375,36 @@ window.addEventListener("DOMContentLoaded", () => {
         const renderedX = centerX - renderedWidth / 2;
         const renderedY = centerY - renderedHeight / 2;
 
-        roundedRect(
-          renderedX,
-          renderedY,
-          renderedWidth,
-          renderedHeight,
-          1,
-          `rgb(${red} ${green} ${blue})`,
-        );
+        if (pixels) {
+          const red = pixels[pixelIndex];
+          const green = pixels[pixelIndex + 1];
+          const blue = pixels[pixelIndex + 2];
+
+          roundedRect(
+            renderedX,
+            renderedY,
+            renderedWidth,
+            renderedHeight,
+            1,
+            `rgb(${red} ${green} ${blue})`,
+          );
+        } else {
+          context.drawImage(
+            sampleCanvas,
+            column,
+            row,
+            1,
+            1,
+            renderedX,
+            renderedY,
+            renderedWidth,
+            renderedHeight,
+          );
+        }
       }
     }
+
+    context.imageSmoothingEnabled = true;
 
     if (fallbackApplied) {
       mediaFrame.classList.remove("has-video-fallback");
