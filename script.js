@@ -27,6 +27,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let frameCallbackId = 0;
   let animationFrameId = 0;
   let rippleAnimationFrameId = 0;
+  let rasterRecoveryTimeoutId = 0;
   let isFrameLoopActive = false;
   let cursorPillFrameId = 0;
   let cursorPillLastTime = 0;
@@ -145,7 +146,7 @@ window.addEventListener("DOMContentLoaded", () => {
         resizeCanvas();
         bootVideo();
         startVideoFrameLoop();
-        drawFrame();
+        scheduleRasterRecovery();
       });
     }
 
@@ -298,7 +299,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function drawFrame() {
     if (!isReady || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
-      return;
+      return false;
     }
 
     const width = canvas.clientWidth;
@@ -412,6 +413,43 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     hasDrawnFrame = true;
+    return true;
+  }
+
+  function safeDrawFrame() {
+    try {
+      return drawFrame();
+    } catch {
+      context.imageSmoothingEnabled = true;
+      return false;
+    }
+  }
+
+  function scheduleRasterRecovery() {
+    window.clearTimeout(rasterRecoveryTimeoutId);
+    let attempts = 0;
+
+    function tryRenderRaster() {
+      rasterRecoveryTimeoutId = 0;
+
+      if (document.hidden) {
+        return;
+      }
+
+      resizeCanvas();
+
+      if (safeDrawFrame()) {
+        return;
+      }
+
+      attempts += 1;
+
+      if (attempts < 40) {
+        rasterRecoveryTimeoutId = window.setTimeout(tryRenderRaster, 150);
+      }
+    }
+
+    tryRenderRaster();
   }
 
   function queueVideoFrame() {
@@ -427,8 +465,11 @@ window.addEventListener("DOMContentLoaded", () => {
           return;
         }
 
-        drawFrame();
-        queueVideoFrame();
+        try {
+          safeDrawFrame();
+        } finally {
+          queueVideoFrame();
+        }
       });
       return;
     }
@@ -440,8 +481,11 @@ window.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      drawFrame();
-      queueVideoFrame();
+      try {
+        safeDrawFrame();
+      } finally {
+        queueVideoFrame();
+      }
     });
   }
 
@@ -470,7 +514,7 @@ window.addEventListener("DOMContentLoaded", () => {
     rippleAnimationFrameId = 0;
     const now = performance.now();
     ripples = ripples.filter((ripple) => now - ripple.startedAt < 1600);
-    drawFrame();
+    safeDrawFrame();
 
     if (ripples.length > 0 && !document.hidden) {
       rippleAnimationFrameId = window.requestAnimationFrame(animateRipples);
@@ -484,7 +528,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     isReady = true;
     resizeCanvas();
-    drawFrame();
+    scheduleRasterRecovery();
   }
 
   function createRipple(event) {
@@ -515,6 +559,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     try {
       await video.play();
+      startEffect();
     } catch {
       startEffect();
     }
@@ -523,23 +568,24 @@ window.addEventListener("DOMContentLoaded", () => {
   function resumeExperience() {
     resizeCanvas();
 
+    if (video.videoWidth && video.videoHeight) {
+      isReady = true;
+    }
+
     if (video.networkState === HTMLMediaElement.NETWORK_EMPTY) {
       video.load();
     }
 
     bootVideo();
     startVideoFrameLoop();
-    window.requestAnimationFrame(() => {
-      resizeCanvas();
-      drawFrame();
-    });
+    scheduleRasterRecovery();
   }
 
   video.addEventListener("loadedmetadata", startEffect);
   video.addEventListener("loadeddata", startEffect);
   video.addEventListener("canplay", startEffect);
   video.addEventListener("playing", startEffect);
-  video.addEventListener("timeupdate", drawFrame);
+  video.addEventListener("timeupdate", safeDrawFrame);
   video.addEventListener("pause", () => {
     if (!document.hidden) {
       bootVideo();
@@ -554,7 +600,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function handleViewportResize() {
     resizeCanvas();
-    drawFrame();
+    safeDrawFrame();
   }
 
   window.addEventListener("resize", handleViewportResize);
@@ -585,6 +631,7 @@ window.addEventListener("DOMContentLoaded", () => {
     stopVideoFrameLoop();
     window.cancelAnimationFrame(rippleAnimationFrameId);
     rippleAnimationFrameId = 0;
+    window.clearTimeout(rasterRecoveryTimeoutId);
     window.cancelAnimationFrame(cursorPillFrameId);
     window.clearTimeout(cursorPillExpressionTimeoutId);
   });
