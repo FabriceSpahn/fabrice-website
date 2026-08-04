@@ -170,11 +170,13 @@ a {
   padding: max(clamp(44px, 7vw, 104px), calc(env(safe-area-inset-top) + 20px)) 0 150px;
 }
 
+#projects-panel .content-panel__inner,
 #about-panel .content-panel__inner,
 #contact-panel .content-panel__inner {
   line-height: 30px;
 }
 
+.projects-grid,
 .intro-grid,
 .info-section,
 .contact-grid {
@@ -184,6 +186,7 @@ a {
   align-items: start;
 }
 
+.projects-grid > *,
 .intro-grid > *,
 .info-section > *,
 .contact-grid > *,
@@ -196,6 +199,8 @@ a {
   margin-bottom: clamp(96px, 14vh, 160px);
 }
 
+.projects-grid h1,
+.projects-copy p,
 .intro-grid h1,
 .intro-grid p,
 .info-section h2,
@@ -209,6 +214,9 @@ a {
   color: var(--text);
 }
 
+.projects-grid h1,
+.projects-copy p,
+.projects-request,
 .intro-grid h1,
 .intro-grid p,
 .info-section h2,
@@ -220,6 +228,22 @@ a {
 .contact-copy {
   font-size: 1.3rem;
   font-weight: 700;
+}
+
+.projects-copy {
+  max-width: 66ch;
+}
+
+.projects-lock {
+  display: block;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 32px;
+  color: var(--text);
+}
+
+.projects-copy p {
+  margin-bottom: 32px;
 }
 
 .intro-grid p {
@@ -456,12 +480,14 @@ a {
 }
 
 .site-nav__link[data-view="home"],
+.site-nav__link[data-view="projects"],
 .site-nav__link[data-view="about"],
 .site-nav__link[data-view="contact"] {
   color: rgba(255, 255, 255, 0.55);
 }
 
 .site-nav__link[data-view="home"]:is(:hover, :focus-visible, .is-active),
+.site-nav__link[data-view="projects"]:is(:hover, :focus-visible, .is-active),
 .site-nav__link[data-view="about"]:is(:hover, :focus-visible, .is-active),
 .site-nav__link[data-view="contact"]:is(:hover, :focus-visible, .is-active) {
   color: #ffffff;
@@ -630,6 +656,7 @@ html.is-embedded .legal-document {
     padding-top: max(32px, calc(env(safe-area-inset-top) + 16px));
   }
 
+  .projects-grid,
   .intro-grid,
   .info-section,
   .contact-grid,
@@ -687,6 +714,21 @@ html.is-embedded .legal-document {
 
 }
 
+@media (max-width: 340px) {
+  .site-nav__link {
+    padding-right: 7px;
+    padding-left: 7px;
+    font-size: 14px;
+  }
+
+  .site-nav__link:hover,
+  .site-nav__link:focus-visible,
+  .site-nav__link.is-active {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+}
+
 @media (pointer: coarse) {
   .cursor-pill {
     display: none;
@@ -699,6 +741,13 @@ html.is-embedded .legal-document {
 
   .site-nav__link:hover:not(.is-active) .site-nav__label-track {
     transform: none;
+  }
+}
+
+@media (max-width: 340px) and (pointer: coarse) {
+  .site-nav__link:hover:not(.is-active) {
+    padding-right: 7px;
+    padding-left: 7px;
   }
 }
 
