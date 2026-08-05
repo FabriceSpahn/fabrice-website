@@ -11,8 +11,16 @@ window.addEventListener("DOMContentLoaded", () => {
   const panels = Array.from(document.querySelectorAll("[data-panel]"));
   const video = document.getElementById("hero-video");
   const canvas = document.getElementById("hero-raster");
+  const transitionCanvas = document.getElementById("hero-transition");
   const mediaFrame = document.querySelector(".hero-media-frame");
+  const videoSources = [
+    "assets/media/video-1.mp4?v=20260805-1",
+    "assets/media/video-2.mp4?v=20260805-1",
+    "assets/media/video-3.mp4?v=20260805-1",
+  ];
+  const preloadedVideos = [];
   const context = canvas?.getContext("2d");
+  const transitionContext = transitionCanvas?.getContext("2d");
   const sampleCanvas = document.createElement("canvas");
   const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
   const cursorPill = document.querySelector("[data-cursor-pill]");
@@ -20,6 +28,8 @@ window.addEventListener("DOMContentLoaded", () => {
   const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
   let activeView = "home";
+  let currentVideoIndex = 0;
+  let isVideoTransitionPending = false;
   let isReady = false;
   let hasDrawnFrame = false;
   let fallbackApplied = false;
@@ -28,6 +38,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let animationFrameId = 0;
   let rippleAnimationFrameId = 0;
   let rasterRecoveryTimeoutId = 0;
+  let videoTransitionTimeoutId = 0;
   let isFrameLoopActive = false;
   let cursorPillFrameId = 0;
   let cursorPillLastTime = 0;
@@ -239,7 +250,15 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  if (!video || !canvas || !mediaFrame || !context || !sampleContext) {
+  if (
+    !video ||
+    !canvas ||
+    !transitionCanvas ||
+    !mediaFrame ||
+    !context ||
+    !transitionContext ||
+    !sampleContext
+  ) {
     return;
   }
 
@@ -413,6 +432,11 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     hasDrawnFrame = true;
+
+    if (isVideoTransitionPending) {
+      fadeVideoTransition();
+    }
+
     return true;
   }
 
@@ -565,6 +589,78 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function clearVideoTransition() {
+    window.clearTimeout(videoTransitionTimeoutId);
+    isVideoTransitionPending = false;
+    transitionCanvas.classList.remove("is-visible", "is-fading");
+    transitionContext.clearRect(0, 0, transitionCanvas.width, transitionCanvas.height);
+  }
+
+  function fadeVideoTransition() {
+    if (!isVideoTransitionPending) {
+      return;
+    }
+
+    window.clearTimeout(videoTransitionTimeoutId);
+    isVideoTransitionPending = false;
+
+    window.requestAnimationFrame(() => {
+      transitionCanvas.classList.add("is-fading");
+    });
+
+    videoTransitionTimeoutId = window.setTimeout(clearVideoTransition, 740);
+  }
+
+  function captureVideoTransitionFrame() {
+    window.clearTimeout(videoTransitionTimeoutId);
+
+    try {
+      transitionCanvas.width = canvas.width;
+      transitionCanvas.height = canvas.height;
+      transitionContext.setTransform(1, 0, 0, 1, 0, 0);
+      transitionContext.clearRect(0, 0, transitionCanvas.width, transitionCanvas.height);
+      transitionContext.drawImage(canvas, 0, 0);
+      transitionCanvas.classList.remove("is-fading");
+      transitionCanvas.classList.add("is-visible");
+      isVideoTransitionPending = true;
+
+      // Avoid a frozen overlay if the next video cannot render a frame.
+      videoTransitionTimeoutId = window.setTimeout(fadeVideoTransition, 4000);
+    } catch {
+      clearVideoTransition();
+    }
+  }
+
+  function cycleHeroVideo() {
+    if (activeView !== "home") {
+      return;
+    }
+
+    captureVideoTransitionFrame();
+    currentVideoIndex = (currentVideoIndex + 1) % videoSources.length;
+    isReady = false;
+    canReadVideoPixels = window.location.protocol !== "file:";
+    fallbackApplied = false;
+    mediaFrame.classList.remove("has-video-fallback");
+    video.pause();
+    video.src = videoSources[currentVideoIndex];
+    video.load();
+    bootVideo();
+    scheduleRasterRecovery();
+  }
+
+  function preloadAlternateVideos() {
+    videoSources.slice(1).forEach((source) => {
+      const preloadVideo = document.createElement("video");
+      preloadVideo.preload = "auto";
+      preloadVideo.muted = true;
+      preloadVideo.playsInline = true;
+      preloadVideo.src = source;
+      preloadVideo.load();
+      preloadedVideos.push(preloadVideo);
+    });
+  }
+
   function resumeExperience() {
     resizeCanvas();
 
@@ -593,6 +689,7 @@ window.addEventListener("DOMContentLoaded", () => {
   });
   mediaFrame.addEventListener("pointerdown", createRipple);
   mediaFrame.addEventListener("pointerdown", toggleCursorExpression);
+  mediaFrame.addEventListener("click", cycleHeroVideo);
   mediaFrame.addEventListener("pointermove", moveCursorPill);
   mediaFrame.addEventListener("pointerenter", moveCursorPill);
   mediaFrame.addEventListener("pointerleave", hideCursorPill);
@@ -607,6 +704,7 @@ window.addEventListener("DOMContentLoaded", () => {
   window.visualViewport?.addEventListener("resize", handleViewportResize);
 
   resumeExperience();
+  preloadAlternateVideos();
 
   window.setTimeout(() => {
     if (!hasDrawnFrame) {
@@ -632,6 +730,7 @@ window.addEventListener("DOMContentLoaded", () => {
     window.cancelAnimationFrame(rippleAnimationFrameId);
     rippleAnimationFrameId = 0;
     window.clearTimeout(rasterRecoveryTimeoutId);
+    window.clearTimeout(videoTransitionTimeoutId);
     window.cancelAnimationFrame(cursorPillFrameId);
     window.clearTimeout(cursorPillExpressionTimeoutId);
   });
