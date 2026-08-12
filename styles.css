@@ -435,6 +435,7 @@ a {
 }
 
 .site-nav__link {
+  --nav-label-height: 20px;
   appearance: none;
   display: flex;
   align-items: center;
@@ -513,11 +514,11 @@ a {
 .site-nav__label {
   display: block;
   width: max-content;
-  height: 1em;
+  height: var(--nav-label-height);
   overflow: hidden;
-  line-height: 1;
+  line-height: var(--nav-label-height);
   text-align: center;
-  transform: translateY(-0.5px);
+  transform: translateY(1px);
 }
 
 .site-nav__label-track {
@@ -531,11 +532,10 @@ a {
 }
 
 .site-nav__label-track > span {
-  display: flex;
+  display: block;
   width: 100%;
-  flex: 0 0 1em;
-  align-items: center;
-  justify-content: center;
+  height: var(--nav-label-height);
+  line-height: var(--nav-label-height);
   text-align: center;
 }
 
@@ -733,6 +733,7 @@ html.is-embedded .legal-document {
 
 @media (max-width: 340px) {
   .site-nav__link {
+    --nav-label-height: 18px;
     padding-right: 7px;
     padding-left: 7px;
     font-size: 14px;

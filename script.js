@@ -19,13 +19,14 @@ window.addEventListener("DOMContentLoaded", () => {
     "assets/media/video-3.mp4?v=20260805-1",
   ];
   const preloadedVideos = [];
-  const context = canvas?.getContext("2d");
-  const transitionContext = transitionCanvas?.getContext("2d");
+  const context = canvas?.getContext("2d", { alpha: false });
+  const transitionContext = transitionCanvas?.getContext("2d", { alpha: false });
   const sampleCanvas = document.createElement("canvas");
-  const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+  const sampleContext = sampleCanvas.getContext("2d", { alpha: false, willReadFrequently: true });
   const cursorPill = document.querySelector("[data-cursor-pill]");
   const cursorExpression = document.querySelector("[data-cursor-expression]");
   const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  const constrainedDevice = window.matchMedia("(max-width: 680px), (pointer: coarse)");
 
   let activeView = "home";
   let currentVideoIndex = 0;
@@ -39,6 +40,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let rippleAnimationFrameId = 0;
   let rasterRecoveryTimeoutId = 0;
   let videoTransitionTimeoutId = 0;
+  let lastRasterDrawTime = 0;
   let isFrameLoopActive = false;
   let cursorPillFrameId = 0;
   let cursorPillLastTime = 0;
@@ -152,6 +154,11 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (nextView !== "home") {
       hideCursorPill();
+      stopVideoFrameLoop();
+      window.cancelAnimationFrame(rippleAnimationFrameId);
+      rippleAnimationFrameId = 0;
+      ripples = [];
+      video.pause();
     } else {
       window.requestAnimationFrame(() => {
         resizeCanvas();
@@ -265,7 +272,10 @@ window.addEventListener("DOMContentLoaded", () => {
   function resizeCanvas() {
     const width = Math.max(1, Math.round(canvas.clientWidth));
     const height = Math.max(1, Math.round(canvas.clientHeight));
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // The effect is intentionally coarse. Extra Retina pixels add memory and
+    // GPU cost without a visible benefit on smaller touch devices.
+    const maxDpr = constrainedDevice.matches ? 1 : 1.5;
+    const dpr = Math.min(window.devicePixelRatio || 1, maxDpr);
     const outputWidth = Math.round(width * dpr);
     const outputHeight = Math.round(height * dpr);
 
@@ -440,7 +450,18 @@ window.addEventListener("DOMContentLoaded", () => {
     return true;
   }
 
-  function safeDrawFrame() {
+  function safeDrawFrame(force = false) {
+    const now = performance.now();
+    const targetFrameInterval = constrainedDevice.matches ? 1000 / 30 : 1000 / 45;
+
+    // Video, ripple and recovery events may arrive together. Keep all of them
+    // inside one shared render budget instead of redrawing the same frame.
+    if (!force && now - lastRasterDrawTime < targetFrameInterval) {
+      return false;
+    }
+
+    lastRasterDrawTime = now;
+
     try {
       return drawFrame();
     } catch {
@@ -462,7 +483,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
       resizeCanvas();
 
-      if (safeDrawFrame()) {
+      if (safeDrawFrame(true)) {
         return;
       }
 
@@ -652,7 +673,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function preloadAlternateVideos() {
     videoSources.slice(1).forEach((source) => {
       const preloadVideo = document.createElement("video");
-      preloadVideo.preload = "auto";
+      preloadVideo.preload = constrainedDevice.matches ? "metadata" : "auto";
       preloadVideo.muted = true;
       preloadVideo.playsInline = true;
       preloadVideo.src = source;
@@ -683,7 +704,7 @@ window.addEventListener("DOMContentLoaded", () => {
   video.addEventListener("playing", startEffect);
   video.addEventListener("timeupdate", safeDrawFrame);
   video.addEventListener("pause", () => {
-    if (!document.hidden) {
+    if (!document.hidden && activeView === "home") {
       bootVideo();
     }
   });
@@ -697,7 +718,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function handleViewportResize() {
     resizeCanvas();
-    safeDrawFrame();
+    safeDrawFrame(true);
   }
 
   window.addEventListener("resize", handleViewportResize);
@@ -717,6 +738,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopVideoFrameLoop();
+      video.pause();
       window.cancelAnimationFrame(rippleAnimationFrameId);
       rippleAnimationFrameId = 0;
       return;
