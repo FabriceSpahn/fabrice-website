@@ -30,6 +30,9 @@ window.addEventListener("DOMContentLoaded", () => {
 
   let activeView = "home";
   let currentVideoIndex = 0;
+  let renderVideo = video;
+  let frameCallbackVideo = null;
+  let isMobileVideoSwitching = false;
   let isVideoTransitionPending = false;
   let isReady = false;
   let hasDrawnFrame = false;
@@ -40,7 +43,6 @@ window.addEventListener("DOMContentLoaded", () => {
   let rippleAnimationFrameId = 0;
   let rasterRecoveryTimeoutId = 0;
   let videoTransitionTimeoutId = 0;
-  let mobileVideoCycleTimeoutId = 0;
   let lastRasterDrawTime = 0;
   let isFrameLoopActive = false;
   let cursorPillFrameId = 0;
@@ -159,7 +161,7 @@ window.addEventListener("DOMContentLoaded", () => {
       window.cancelAnimationFrame(rippleAnimationFrameId);
       rippleAnimationFrameId = 0;
       ripples = [];
-      video.pause();
+      renderVideo.pause();
     } else {
       window.requestAnimationFrame(() => {
         resizeCanvas();
@@ -332,7 +334,12 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   function drawFrame() {
-    if (!isReady || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
+    if (
+      !isReady ||
+      renderVideo.readyState < 2 ||
+      !renderVideo.videoWidth ||
+      !renderVideo.videoHeight
+    ) {
       return false;
     }
 
@@ -376,8 +383,19 @@ window.addEventListener("DOMContentLoaded", () => {
 
     sampleCanvas.width = columns;
     sampleCanvas.height = rows;
-    const fit = fitCover(video.videoWidth, video.videoHeight, columns, rows);
-    sampleContext.drawImage(video, fit.offsetX, fit.offsetY, fit.drawWidth, fit.drawHeight);
+    const fit = fitCover(
+      renderVideo.videoWidth,
+      renderVideo.videoHeight,
+      columns,
+      rows,
+    );
+    sampleContext.drawImage(
+      renderVideo,
+      fit.offsetX,
+      fit.offsetY,
+      fit.drawWidth,
+      fit.drawHeight,
+    );
     let pixels = null;
 
     if (canReadVideoPixels) {
@@ -525,9 +543,11 @@ window.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (typeof video.requestVideoFrameCallback === "function") {
-      frameCallbackId = video.requestVideoFrameCallback(() => {
+    if (typeof renderVideo.requestVideoFrameCallback === "function") {
+      frameCallbackVideo = renderVideo;
+      frameCallbackId = renderVideo.requestVideoFrameCallback(() => {
         frameCallbackId = 0;
+        frameCallbackVideo = null;
 
         if (!isFrameLoopActive) {
           return;
@@ -569,12 +589,17 @@ window.addEventListener("DOMContentLoaded", () => {
   function stopVideoFrameLoop() {
     isFrameLoopActive = false;
 
-    if (frameCallbackId && typeof video.cancelVideoFrameCallback === "function") {
-      video.cancelVideoFrameCallback(frameCallbackId);
+    if (
+      frameCallbackId &&
+      frameCallbackVideo &&
+      typeof frameCallbackVideo.cancelVideoFrameCallback === "function"
+    ) {
+      frameCallbackVideo.cancelVideoFrameCallback(frameCallbackId);
     }
 
     window.cancelAnimationFrame(animationFrameId);
     frameCallbackId = 0;
+    frameCallbackVideo = null;
     animationFrameId = 0;
   }
 
@@ -589,8 +614,8 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function startEffect() {
-    if (!video.videoWidth || !video.videoHeight) {
+  function startEffect(targetVideo = renderVideo) {
+    if (!targetVideo.videoWidth || !targetVideo.videoHeight) {
       return;
     }
 
@@ -620,16 +645,16 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function bootVideo() {
-    video.muted = true;
-    video.defaultMuted = true;
-    video.playsInline = true;
+  async function bootVideo(targetVideo = renderVideo) {
+    targetVideo.muted = true;
+    targetVideo.defaultMuted = true;
+    targetVideo.playsInline = true;
 
     try {
-      await video.play();
-      startEffect();
+      await targetVideo.play();
+      startEffect(targetVideo);
     } catch {
-      startEffect();
+      startEffect(targetVideo);
     }
   }
 
@@ -694,12 +719,81 @@ window.addEventListener("DOMContentLoaded", () => {
     scheduleRasterRecovery();
   }
 
-  function cycleHeroVideo() {
-    window.clearTimeout(mobileVideoCycleTimeoutId);
+  function waitForPlayableVideo(targetVideo) {
+    if (targetVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return Promise.resolve(true);
+    }
 
+    return new Promise((resolve) => {
+      let timeoutId = 0;
+
+      const finish = (isReadyToPlay) => {
+        window.clearTimeout(timeoutId);
+        targetVideo.removeEventListener("loadeddata", handleReady);
+        targetVideo.removeEventListener("canplay", handleReady);
+        targetVideo.removeEventListener("error", handleError);
+        resolve(isReadyToPlay);
+      };
+      const handleReady = () => finish(true);
+      const handleError = () => finish(false);
+
+      targetVideo.addEventListener("loadeddata", handleReady, { once: true });
+      targetVideo.addEventListener("canplay", handleReady, { once: true });
+      targetVideo.addEventListener("error", handleError, { once: true });
+      timeoutId = window.setTimeout(() => finish(false), 4000);
+      targetVideo.load();
+    });
+  }
+
+  async function cycleMobileHeroVideo() {
+    if (activeView !== "home" || isMobileVideoSwitching) {
+      return;
+    }
+
+    const nextIndex = (currentVideoIndex + 1) % videoSources.length;
+    const nextVideo = nextIndex === 0 ? video : preloadedVideos[nextIndex - 1];
+
+    if (!nextVideo) {
+      return;
+    }
+
+    isMobileVideoSwitching = true;
+    nextVideo.muted = true;
+    nextVideo.defaultMuted = true;
+    nextVideo.playsInline = true;
+    const isPlayable = await waitForPlayableVideo(nextVideo);
+
+    if (!isPlayable || activeView !== "home") {
+      isMobileVideoSwitching = false;
+      return;
+    }
+
+    try {
+      await nextVideo.play();
+    } catch {
+      isMobileVideoSwitching = false;
+      return;
+    }
+
+    const previousVideo = renderVideo;
+    stopVideoFrameLoop();
+    renderVideo = nextVideo;
+    currentVideoIndex = nextIndex;
+    isReady = true;
+    lastRasterDrawTime = 0;
+    safeDrawFrame(true);
+    startVideoFrameLoop();
+
+    if (previousVideo !== renderVideo) {
+      previousVideo.pause();
+    }
+
+    isMobileVideoSwitching = false;
+  }
+
+  function cycleHeroVideo() {
     if (constrainedDevice.matches) {
-      // Let the touch ripple establish itself before the crossfade overlays it.
-      mobileVideoCycleTimeoutId = window.setTimeout(performHeroVideoCycle, 180);
+      cycleMobileHeroVideo();
       return;
     }
 
@@ -709,10 +803,15 @@ window.addEventListener("DOMContentLoaded", () => {
   function preloadAlternateVideos() {
     videoSources.slice(1).forEach((source) => {
       const preloadVideo = document.createElement("video");
-      preloadVideo.preload = constrainedDevice.matches ? "metadata" : "auto";
+      preloadVideo.className = "hero-video-buffer";
+      preloadVideo.setAttribute("aria-hidden", "true");
+      preloadVideo.preload = "auto";
       preloadVideo.muted = true;
+      preloadVideo.defaultMuted = true;
       preloadVideo.playsInline = true;
+      preloadVideo.loop = true;
       preloadVideo.src = source;
+      mediaFrame.append(preloadVideo);
       preloadVideo.load();
       preloadedVideos.push(preloadVideo);
     });
@@ -721,12 +820,12 @@ window.addEventListener("DOMContentLoaded", () => {
   function resumeExperience() {
     resizeCanvas();
 
-    if (video.videoWidth && video.videoHeight) {
+    if (renderVideo.videoWidth && renderVideo.videoHeight) {
       isReady = true;
     }
 
-    if (video.networkState === HTMLMediaElement.NETWORK_EMPTY) {
-      video.load();
+    if (renderVideo.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+      renderVideo.load();
     }
 
     bootVideo();
@@ -734,11 +833,17 @@ window.addEventListener("DOMContentLoaded", () => {
     scheduleRasterRecovery();
   }
 
-  video.addEventListener("loadedmetadata", startEffect);
-  video.addEventListener("loadeddata", startEffect);
-  video.addEventListener("canplay", startEffect);
-  video.addEventListener("playing", startEffect);
-  video.addEventListener("timeupdate", safeDrawFrame);
+  const refreshPrimaryVideo = () => {
+    if (renderVideo === video) {
+      startEffect(video);
+    }
+  };
+
+  video.addEventListener("loadedmetadata", refreshPrimaryVideo);
+  video.addEventListener("loadeddata", refreshPrimaryVideo);
+  video.addEventListener("canplay", refreshPrimaryVideo);
+  video.addEventListener("playing", refreshPrimaryVideo);
+  video.addEventListener("timeupdate", () => safeDrawFrame());
   video.addEventListener("pause", () => {
     if (!document.hidden && activeView === "home") {
       bootVideo();
@@ -774,7 +879,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopVideoFrameLoop();
-      video.pause();
+      renderVideo.pause();
       window.cancelAnimationFrame(rippleAnimationFrameId);
       rippleAnimationFrameId = 0;
       return;
@@ -789,7 +894,6 @@ window.addEventListener("DOMContentLoaded", () => {
     rippleAnimationFrameId = 0;
     window.clearTimeout(rasterRecoveryTimeoutId);
     window.clearTimeout(videoTransitionTimeoutId);
-    window.clearTimeout(mobileVideoCycleTimeoutId);
     window.cancelAnimationFrame(cursorPillFrameId);
     window.clearTimeout(cursorPillExpressionTimeoutId);
   });
