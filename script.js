@@ -40,6 +40,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let rippleAnimationFrameId = 0;
   let rasterRecoveryTimeoutId = 0;
   let videoTransitionTimeoutId = 0;
+  let mobileVideoCycleTimeoutId = 0;
   let lastRasterDrawTime = 0;
   let isFrameLoopActive = false;
   let cursorPillFrameId = 0;
@@ -326,6 +327,10 @@ window.addEventListener("DOMContentLoaded", () => {
     return progress * progress * (3 - 2 * progress);
   }
 
+  function getRippleDuration() {
+    return constrainedDevice.matches ? 1300 : 1600;
+  }
+
   function drawFrame() {
     if (!isReady || video.readyState < 2 || !video.videoWidth || !video.videoHeight) {
       return false;
@@ -340,9 +345,30 @@ window.addEventListener("DOMContentLoaded", () => {
     const cellHeight = cellWidth * 2.08;
     const rows = Math.max(1, Math.ceil((height + gap) / (cellHeight + gap)));
     const now = performance.now();
-    const rippleDuration = 1600;
+    const rippleDuration = getRippleDuration();
 
     ripples = ripples.filter((ripple) => now - ripple.startedAt < rippleDuration);
+
+    // Values that only change once per ripple are calculated once per frame,
+    // rather than again for every individual tile.
+    const rippleStates = ripples.map((ripple) => {
+      const progress = Math.min(1, (now - ripple.startedAt) / rippleDuration);
+      const waveProgress = 1 - Math.pow(1 - progress, 2);
+      const farthestX = Math.max(ripple.x, width - ripple.x);
+      const farthestY = Math.max(ripple.y, height - ripple.y);
+      const maxRadius = Math.hypot(farthestX, farthestY);
+      const bandWidth = Math.max(
+        constrainedDevice.matches ? 30 : 38,
+        Math.min(width, height) * 0.06,
+      );
+
+      return {
+        ...ripple,
+        progress,
+        waveRadius: waveProgress * maxRadius,
+        bandWidth,
+      };
+    });
 
     context.clearRect(0, 0, width, height);
     context.fillStyle = "#000000";
@@ -373,33 +399,29 @@ window.addEventListener("DOMContentLoaded", () => {
         const centerY = tileY + cellHeight / 2;
         let rippleStrength = 0;
 
-        ripples.forEach((ripple) => {
-          const progress = Math.min(1, (now - ripple.startedAt) / rippleDuration);
-          const waveProgress = 1 - Math.pow(1 - progress, 2);
-          const farthestX = Math.max(ripple.x, width - ripple.x);
-          const farthestY = Math.max(ripple.y, height - ripple.y);
-          const maxRadius = Math.hypot(farthestX, farthestY);
-          const waveRadius = waveProgress * maxRadius;
-          const bandWidth = Math.max(38, Math.min(width, height) * 0.06);
+        rippleStates.forEach((ripple) => {
           const distance = Math.hypot(centerX - ripple.x, centerY - ripple.y);
           const primaryRing = smoothstep(
             0,
             1,
-            Math.max(0, 1 - Math.abs(distance - waveRadius) / bandWidth),
+            Math.max(0, 1 - Math.abs(distance - ripple.waveRadius) / ripple.bandWidth),
           );
-          const secondaryRadius = Math.max(0, waveRadius - bandWidth * 1.8);
+          const secondaryRadius = Math.max(0, ripple.waveRadius - ripple.bandWidth * 1.8);
           const secondaryRing = smoothstep(
             0,
             1,
-            Math.max(0, 1 - Math.abs(distance - secondaryRadius) / (bandWidth * 0.8)),
+            Math.max(
+              0,
+              1 - Math.abs(distance - secondaryRadius) / (ripple.bandWidth * 0.8),
+            ),
           );
-          const decay = 1 - progress;
+          const decay = 1 - ripple.progress;
           const strength = Math.min(1, (primaryRing * 0.75 + secondaryRing * 0.28) * decay);
 
           rippleStrength = 1 - (1 - rippleStrength) * (1 - strength);
         });
 
-        const scale = 1 - rippleStrength * 0.78;
+        const scale = 1 - rippleStrength * (constrainedDevice.matches ? 0.68 : 0.78);
         const renderedWidth = cellWidth * scale;
         const renderedHeight = cellHeight * scale;
         const renderedX = centerX - renderedWidth / 2;
@@ -452,7 +474,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   function safeDrawFrame(force = false) {
     const now = performance.now();
-    const targetFrameInterval = constrainedDevice.matches ? 1000 / 30 : 1000 / 45;
+    const targetFrameRate = constrainedDevice.matches && ripples.length === 0 ? 30 : 45;
+    const targetFrameInterval = 1000 / targetFrameRate;
 
     // Video, ripple and recovery events may arrive together. Keep all of them
     // inside one shared render budget instead of redrawing the same frame.
@@ -558,7 +581,7 @@ window.addEventListener("DOMContentLoaded", () => {
   function animateRipples() {
     rippleAnimationFrameId = 0;
     const now = performance.now();
-    ripples = ripples.filter((ripple) => now - ripple.startedAt < 1600);
+    ripples = ripples.filter((ripple) => now - ripple.startedAt < getRippleDuration());
     safeDrawFrame();
 
     if (ripples.length > 0 && !document.hidden) {
@@ -629,7 +652,8 @@ window.addEventListener("DOMContentLoaded", () => {
       transitionCanvas.classList.add("is-fading");
     });
 
-    videoTransitionTimeoutId = window.setTimeout(clearVideoTransition, 740);
+    const fadeCleanupDelay = constrainedDevice.matches ? 460 : 740;
+    videoTransitionTimeoutId = window.setTimeout(clearVideoTransition, fadeCleanupDelay);
   }
 
   function captureVideoTransitionFrame() {
@@ -652,7 +676,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function cycleHeroVideo() {
+  function performHeroVideoCycle() {
     if (activeView !== "home") {
       return;
     }
@@ -668,6 +692,18 @@ window.addEventListener("DOMContentLoaded", () => {
     video.load();
     bootVideo();
     scheduleRasterRecovery();
+  }
+
+  function cycleHeroVideo() {
+    window.clearTimeout(mobileVideoCycleTimeoutId);
+
+    if (constrainedDevice.matches) {
+      // Let the touch ripple establish itself before the crossfade overlays it.
+      mobileVideoCycleTimeoutId = window.setTimeout(performHeroVideoCycle, 180);
+      return;
+    }
+
+    performHeroVideoCycle();
   }
 
   function preloadAlternateVideos() {
@@ -753,6 +789,7 @@ window.addEventListener("DOMContentLoaded", () => {
     rippleAnimationFrameId = 0;
     window.clearTimeout(rasterRecoveryTimeoutId);
     window.clearTimeout(videoTransitionTimeoutId);
+    window.clearTimeout(mobileVideoCycleTimeoutId);
     window.cancelAnimationFrame(cursorPillFrameId);
     window.clearTimeout(cursorPillExpressionTimeoutId);
   });

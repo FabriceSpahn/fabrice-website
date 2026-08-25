@@ -729,6 +729,10 @@ html.is-embedded .legal-document {
     transform: none;
   }
 
+  .hero-transition.is-visible.is-fading {
+    transition-duration: 420ms;
+  }
+
 }
 
 @media (max-width: 340px) {
