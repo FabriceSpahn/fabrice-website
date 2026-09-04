@@ -43,6 +43,7 @@ window.addEventListener("DOMContentLoaded", () => {
   let rippleAnimationFrameId = 0;
   let rasterRecoveryTimeoutId = 0;
   let videoTransitionTimeoutId = 0;
+  let videoPreloadTimeoutId = 0;
   let lastRasterDrawTime = 0;
   let isFrameLoopActive = false;
   let cursorPillFrameId = 0;
@@ -157,6 +158,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
     if (nextView !== "home") {
       hideCursorPill();
+      window.clearTimeout(videoPreloadTimeoutId);
       stopVideoFrameLoop();
       window.cancelAnimationFrame(rippleAnimationFrameId);
       rippleAnimationFrameId = 0;
@@ -168,6 +170,7 @@ window.addEventListener("DOMContentLoaded", () => {
         bootVideo();
         startVideoFrameLoop();
         scheduleRasterRecovery();
+        scheduleNextVideoPreload();
       });
     }
 
@@ -719,30 +722,112 @@ window.addEventListener("DOMContentLoaded", () => {
     scheduleRasterRecovery();
   }
 
+  function getVideoForIndex(index) {
+    return index === 0 ? video : preloadedVideos[index - 1];
+  }
+
+  function getBufferedSeconds(targetVideo) {
+    if (!targetVideo.buffered.length) {
+      return 0;
+    }
+
+    const currentTime = targetVideo.currentTime;
+
+    for (let index = 0; index < targetVideo.buffered.length; index += 1) {
+      const start = targetVideo.buffered.start(index);
+      const end = targetVideo.buffered.end(index);
+
+      if (currentTime >= start && currentTime <= end) {
+        return Math.max(0, end - currentTime);
+      }
+    }
+
+    return 0;
+  }
+
+  function hasStablePlaybackBuffer(targetVideo) {
+    if (targetVideo.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      return false;
+    }
+
+    const duration = Number.isFinite(targetVideo.duration) ? targetVideo.duration : 10;
+    const requiredBuffer = Math.min(2.5, Math.max(1.25, duration * 0.35));
+    return (
+      targetVideo.readyState === HTMLMediaElement.HAVE_ENOUGH_DATA ||
+      getBufferedSeconds(targetVideo) >= requiredBuffer
+    );
+  }
+
+  function isVideoFullyBuffered(targetVideo) {
+    if (!Number.isFinite(targetVideo.duration) || !targetVideo.buffered.length) {
+      return false;
+    }
+
+    return targetVideo.buffered.end(targetVideo.buffered.length - 1) >= targetVideo.duration - 0.15;
+  }
+
+  function prepareVideo(targetVideo) {
+    if (targetVideo.preload !== "auto") {
+      targetVideo.preload = "auto";
+      targetVideo.load();
+      return;
+    }
+
+    if (targetVideo.networkState === HTMLMediaElement.NETWORK_EMPTY) {
+      targetVideo.load();
+    }
+  }
+
   function waitForPlayableVideo(targetVideo) {
-    if (targetVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (hasStablePlaybackBuffer(targetVideo)) {
       return Promise.resolve(true);
     }
 
     return new Promise((resolve) => {
       let timeoutId = 0;
+      let pollId = 0;
 
       const finish = (isReadyToPlay) => {
         window.clearTimeout(timeoutId);
-        targetVideo.removeEventListener("loadeddata", handleReady);
-        targetVideo.removeEventListener("canplay", handleReady);
+        window.clearInterval(pollId);
         targetVideo.removeEventListener("error", handleError);
         resolve(isReadyToPlay);
       };
-      const handleReady = () => finish(true);
       const handleError = () => finish(false);
 
-      targetVideo.addEventListener("loadeddata", handleReady, { once: true });
-      targetVideo.addEventListener("canplay", handleReady, { once: true });
       targetVideo.addEventListener("error", handleError, { once: true });
-      timeoutId = window.setTimeout(() => finish(false), 4000);
-      targetVideo.load();
+      pollId = window.setInterval(() => {
+        if (hasStablePlaybackBuffer(targetVideo)) {
+          finish(true);
+        }
+      }, 100);
+      timeoutId = window.setTimeout(() => finish(false), 12000);
+      prepareVideo(targetVideo);
     });
+  }
+
+  function scheduleNextVideoPreload(delay = 1400) {
+    if (!constrainedDevice.matches || activeView !== "home") {
+      return;
+    }
+
+    window.clearTimeout(videoPreloadTimeoutId);
+    videoPreloadTimeoutId = window.setTimeout(() => {
+      videoPreloadTimeoutId = 0;
+
+      // Finish buffering the visible clip before spending bandwidth on another.
+      if (!isVideoFullyBuffered(renderVideo)) {
+        scheduleNextVideoPreload(1000);
+        return;
+      }
+
+      const nextIndex = (currentVideoIndex + 1) % videoSources.length;
+      const nextVideo = getVideoForIndex(nextIndex);
+
+      if (nextVideo && nextVideo !== renderVideo) {
+        prepareVideo(nextVideo);
+      }
+    }, delay);
   }
 
   async function cycleMobileHeroVideo() {
@@ -751,7 +836,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     const nextIndex = (currentVideoIndex + 1) % videoSources.length;
-    const nextVideo = nextIndex === 0 ? video : preloadedVideos[nextIndex - 1];
+    const nextVideo = getVideoForIndex(nextIndex);
 
     if (!nextVideo) {
       return;
@@ -789,6 +874,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
 
     isMobileVideoSwitching = false;
+    scheduleNextVideoPreload();
   }
 
   function cycleHeroVideo() {
@@ -805,16 +891,21 @@ window.addEventListener("DOMContentLoaded", () => {
       const preloadVideo = document.createElement("video");
       preloadVideo.className = "hero-video-buffer";
       preloadVideo.setAttribute("aria-hidden", "true");
-      preloadVideo.preload = "auto";
+      preloadVideo.preload = constrainedDevice.matches ? "none" : "auto";
       preloadVideo.muted = true;
       preloadVideo.defaultMuted = true;
       preloadVideo.playsInline = true;
       preloadVideo.loop = true;
       preloadVideo.src = source;
       mediaFrame.append(preloadVideo);
-      preloadVideo.load();
+
+      if (!constrainedDevice.matches) {
+        preloadVideo.load();
+      }
       preloadedVideos.push(preloadVideo);
     });
+
+    scheduleNextVideoPreload();
   }
 
   function resumeExperience() {
@@ -831,6 +922,7 @@ window.addEventListener("DOMContentLoaded", () => {
     bootVideo();
     startVideoFrameLoop();
     scheduleRasterRecovery();
+    scheduleNextVideoPreload();
   }
 
   const refreshPrimaryVideo = () => {
@@ -879,6 +971,7 @@ window.addEventListener("DOMContentLoaded", () => {
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {
       stopVideoFrameLoop();
+      window.clearTimeout(videoPreloadTimeoutId);
       renderVideo.pause();
       window.cancelAnimationFrame(rippleAnimationFrameId);
       rippleAnimationFrameId = 0;
@@ -894,6 +987,7 @@ window.addEventListener("DOMContentLoaded", () => {
     rippleAnimationFrameId = 0;
     window.clearTimeout(rasterRecoveryTimeoutId);
     window.clearTimeout(videoTransitionTimeoutId);
+    window.clearTimeout(videoPreloadTimeoutId);
     window.cancelAnimationFrame(cursorPillFrameId);
     window.clearTimeout(cursorPillExpressionTimeoutId);
   });
